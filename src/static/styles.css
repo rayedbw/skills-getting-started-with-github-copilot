@@ -168,8 +168,8 @@ footer {
 }
 
 ul.participants-list {
-  list-style-type: disc;
-  margin-left: 24px;
+  list-style-type: none;
+  margin-left: 0;
 }
 
 .participants-list li {
@@ -192,4 +192,19 @@ ul.participants-list {
 .participants-list em {
   color: #78909c;
   font-style: italic;
+}
+
+.participant-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.delete-participant {
+  cursor: pointer;
+  color: #c00;
+  font-size: 1.2em;
+  margin-left: auto;
 }

@@ -10,7 +10,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const response = await fetch("/activities");
       const activities = await response.json();
 
-      // Clear loading message
       activitiesList.innerHTML = "";
 
       // Populate activities list
@@ -27,20 +26,16 @@ document.addEventListener("DOMContentLoaded", () => {
           <p><strong>Availability:</strong> ${spotsLeft} spots left</p>
           <div class="participants-section">
             <strong>Participants:</strong>
-            ${
-              details.participants.length > 0
-                ? (() => {
-                    const ul = document.createElement("ul");
-                    ul.className = "participants-list";
-                    details.participants.forEach(email => {
-                      const li = document.createElement("li");
-                      li.textContent = email;
-                      ul.appendChild(li);
-                    });
-                    return ul.outerHTML;
-                  })()
-                : `<div class="participants-list"><em>No participants yet</em></div>`
-            }
+            <ul class="participants-list">
+              ${details.participants.length > 0
+                ? details.participants.map(email => `
+                  <li class="participant-row">
+                    <span>${email}</span>
+                    <span class="delete-participant" title="Unregister" data-activity="${name}" data-email="${email}">🗑️</span>
+                  </li>
+                `).join("")
+                : `<li><em>No participants yet</em></li>`}
+            </ul>
           </div>
         `;
 
@@ -51,6 +46,30 @@ document.addEventListener("DOMContentLoaded", () => {
         option.value = name;
         option.textContent = name;
         activitySelect.appendChild(option);
+      });
+
+      document.querySelectorAll('.delete-participant').forEach(icon => {
+        icon.addEventListener('click', async (e) => {
+          const activity = icon.getAttribute('data-activity');
+          const email = icon.getAttribute('data-email');
+          if (confirm(`Unregister ${email} from ${activity}?`)) {
+            try {
+              const res = await fetch(`/activities/${encodeURIComponent(activity)}/unregister`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email })
+              });
+              if (!res.ok) {
+                const err = await res.json();
+                alert(err.detail || 'Failed to unregister');
+              } else {
+                fetchActivities();
+              }
+            } catch (err) {
+              alert('Error unregistering participant');
+            }
+          }
+        });
       });
     } catch (error) {
       activitiesList.innerHTML = "<p>Failed to load activities. Please try again later.</p>";
