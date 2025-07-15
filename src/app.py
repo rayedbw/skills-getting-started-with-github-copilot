@@ -9,79 +9,62 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
+import json
 from pathlib import Path
+from motor.motor_asyncio import AsyncIOMotorClient
+from contextlib import asynccontextmanager
+
+# Global variable to hold the MongoDB collection
+activities_collection = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle manager for the FastAPI application."""
+    global activities_collection
+    
+    # Setup MongoDB connection during startup
+    mongo_client = AsyncIOMotorClient("mongodb://localhost:27017")
+    db = mongo_client.mergington_high
+    activities_collection = db.activities
+    
+    # Load activities from JSON file
+    activities_file = Path(__file__).parent / "activities.json"
+    with open(activities_file, "r") as f:
+        initial_activities = json.load(f)
+        
+    # Check if the collection already has data
+    count = await activities_collection.count_documents({})
+    print(f"Found {count} existing activities in the database")
+    
+    # Reset database to fix duplicate entries (only for development)
+    if count > 10:  # If we have more than expected (indicating duplicates)
+        print("Detected possible duplicates, dropping collection")
+        await db.drop_collection("activities")
+        # Recreate the collection reference
+        activities_collection = db.activities
+        count = 0  # Reset count since we dropped the collection
+    
+    # Only populate if the collection is empty
+    if count == 0:
+        print("Populating database with initial activities")
+        # Pre-populate with initial activities using activity name as _id (key)
+        for name, details in initial_activities.items():
+            await activities_collection.insert_one({"_id": name, **details})
+    
+    yield
+    
+    # Cleanup on shutdown
+    mongo_client.close()
+    print("MongoDB connection closed")
 
 app = FastAPI(title="Mergington High School API",
-              description="API for viewing and signing up for extracurricular activities")
+              description="API for viewing and signing up for extracurricular activities",
+              lifespan=lifespan)
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
-
-# In-memory activity database
-activities = {
-    "Chess Club": {
-        "description": "Learn strategies and compete in chess tournaments",
-        "schedule": "Fridays, 3:30 PM - 5:00 PM",
-        "max_participants": 12,
-        "participants": ["michael@mergington.edu", "daniel@mergington.edu"]
-    },
-    "Programming Class": {
-        "description": "Learn programming fundamentals and build software projects",
-        "schedule": "Tuesdays and Thursdays, 3:30 PM - 4:30 PM",
-        "max_participants": 20,
-        "participants": ["emma@mergington.edu", "sophia@mergington.edu"]
-    },
-    "Gym Class": {
-        "description": "Physical education and sports activities",
-        "schedule": "Mondays, Wednesdays, Fridays, 2:00 PM - 3:00 PM",
-        "max_participants": 30,
-        "participants": ["john@mergington.edu", "olivia@mergington.edu"]
-    },
-    "Soccer Team": {
-        "description": "Join the school soccer team and compete in matches",
-        "schedule": "Wednesdays, 4:00 PM - 5:30 PM",
-        "max_participants": 22,
-        "participants": ["alex@mergington.edu", "lucas@mergington.edu"]
-    },
-    "Basketball Club": {
-        "description": "Practice basketball skills and play friendly games",
-        "schedule": "Mondays, 3:30 PM - 5:00 PM",
-        "max_participants": 15,
-        "participants": ["mia@mergington.edu", "noah@mergington.edu"]
-    },
-    "Art Workshop": {
-        "description": "Explore painting, drawing, and sculpture techniques",
-        "schedule": "Thursdays, 4:00 PM - 5:30 PM",
-        "max_participants": 18,
-        "participants": ["ava@mergington.edu", "liam@mergington.edu"]
-    },
-    "Drama Club": {
-        "description": "Act, direct, and produce school plays and performances",
-        "schedule": "Tuesdays, 3:30 PM - 5:00 PM",
-        "max_participants": 20,
-        "participants": ["ella@mergington.edu", "jack@mergington.edu"]
-    },
-    "Math Olympiad": {
-        "description": "Prepare for math competitions and solve challenging problems",
-        "schedule": "Fridays, 4:00 PM - 5:30 PM",
-        "max_participants": 16,
-        "participants": ["ethan@mergington.edu", "grace@mergington.edu"]
-    },
-    "Science Club": {
-        "description": "Conduct experiments and explore scientific concepts",
-        "schedule": "Wednesdays, 3:30 PM - 5:00 PM",
-        "max_participants": 14,
-        "participants": ["chloe@mergington.edu", "ben@mergington.edu"]
-    },
-    "Photography Club": {
-        "description": "Learn photography techniques and participate in photo walks",
-        "schedule": "Thursdays, 3:30 PM - 5:00 PM",
-        "max_participants": 10,
-        "participants": []
-    }
-}
 
 
 @app.get("/")
@@ -90,8 +73,16 @@ def root():
 
 
 @app.get("/activities")
-def get_activities():
-    return activities
+async def get_activities():
+    """Get all activities from MongoDB"""
+    activities_cursor = activities_collection.find({})
+    activities_dict = {}
+    
+    async for activity in activities_cursor:
+        name = activity.pop("_id")  # Use the _id as the activity name
+        activities_dict[name] = activity
+        
+    return activities_dict
 
 
 @app.post("/activities/{activity_name}/signup")
@@ -100,12 +91,10 @@ async def signup_for_activity(activity_name: str, request: Request):
     data = await request.json()
     email = data.get("email")
 
-    # Validate activity exists
-    if activity_name not in activities:
+    # Retrieve the activity from MongoDB
+    activity = await activities_collection.find_one({"_id": activity_name})
+    if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
-
-    # Get the specific activity
-    activity = activities[activity_name]
 
     # Validate if student is already signed up
     if email in activity["participants"]:
@@ -116,7 +105,10 @@ async def signup_for_activity(activity_name: str, request: Request):
         raise HTTPException(status_code=400, detail="Activity is full")
 
     # Add the student to the activity
-    activity["participants"].append(email)
+    await activities_collection.update_one(
+        {"_id": activity_name},
+        {"$push": {"participants": email}}
+    )
     return {"message": f"Signed up {email} for {activity_name}"}
 
 
@@ -126,17 +118,28 @@ async def unregister_participant(activity_name: str, request: Request):
     data = await request.json()
     email = data.get("email")
 
-    # Validate activity exists
-    if activity_name not in activities:
+    # Retrieve the activity from MongoDB
+    activity = await activities_collection.find_one({"_id": activity_name})
+    if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
-
-    # Get the specific activity
-    activity = activities[activity_name]
 
     # Validate if student is registered for the activity
     if email not in activity["participants"]:
         raise HTTPException(status_code=400, detail="Participant not found in this activity")
 
     # Remove the student from the activity
-    activity["participants"].remove(email)
+    await activities_collection.update_one(
+        {"_id": activity_name},
+        {"$pull": {"participants": email}}
+    )
     return {"message": f"Unregistered {email} from {activity_name}"}
+
+
+@app.get("/db-status")
+async def get_db_status():
+    """Check database status - for debugging purposes"""
+    count = await activities_collection.count_documents({})
+    return {
+        "activities_count": count,
+        "connection_status": "Connected" if activities_collection else "Not connected"
+    }
