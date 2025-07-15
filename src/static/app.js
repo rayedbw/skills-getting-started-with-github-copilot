@@ -85,35 +85,24 @@ document.addEventListener("DOMContentLoaded", () => {
     const activity = document.getElementById("activity").value;
 
     try {
-      const response = await fetch(
-        `/activities/${encodeURIComponent(activity)}/signup?email=${encodeURIComponent(email)}`,
-        {
-          method: "POST",
-        }
-      );
+      const response = await fetch(`/activities/${encodeURIComponent(activity)}/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
 
-      const result = await response.json();
-
-      if (response.ok) {
-        messageDiv.textContent = result.message;
-        messageDiv.className = "success";
-        signupForm.reset();
-      } else {
-        messageDiv.textContent = result.detail || "An error occurred";
+      if (!response.ok) {
+        const error = await response.json();
+        messageDiv.textContent = error.detail || "Failed to sign up.";
         messageDiv.className = "error";
+      } else {
+        messageDiv.textContent = "Successfully signed up!";
+        messageDiv.className = "success";
+        fetchActivities(); // Refresh the activity list dynamically
       }
-
-      messageDiv.classList.remove("hidden");
-
-      // Hide message after 5 seconds
-      setTimeout(() => {
-        messageDiv.classList.add("hidden");
-      }, 5000);
     } catch (error) {
-      messageDiv.textContent = "Failed to sign up. Please try again.";
+      messageDiv.textContent = "An error occurred. Please try again later.";
       messageDiv.className = "error";
-      messageDiv.classList.remove("hidden");
-      console.error("Error signing up:", error);
     }
   });
 

@@ -95,8 +95,11 @@ def get_activities():
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+async def signup_for_activity(activity_name: str, request: Request):
     """Sign up a student for an activity"""
+    data = await request.json()
+    email = data.get("email")
+
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -109,9 +112,9 @@ def signup_for_activity(activity_name: str, email: str):
         raise HTTPException(status_code=400, detail="Already signed up for this activity")
 
     # Validate if activity is full
-    if len(activity["participants"]) >= activity["max_participants"]:  
+    if len(activity["participants"]) >= activity["max_participants"]:
         raise HTTPException(status_code=400, detail="Activity is full")
-    
+
     # Add the student to the activity
     activity["participants"].append(email)
     return {"message": f"Signed up {email} for {activity_name}"}
