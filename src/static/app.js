@@ -25,6 +25,23 @@ document.addEventListener("DOMContentLoaded", () => {
           <p>${details.description}</p>
           <p><strong>Schedule:</strong> ${details.schedule}</p>
           <p><strong>Availability:</strong> ${spotsLeft} spots left</p>
+          <div class="participants-section">
+            <strong>Participants:</strong>
+            ${
+              details.participants.length > 0
+                ? (() => {
+                    const ul = document.createElement("ul");
+                    ul.className = "participants-list";
+                    details.participants.forEach(email => {
+                      const li = document.createElement("li");
+                      li.textContent = email;
+                      ul.appendChild(li);
+                    });
+                    return ul.outerHTML;
+                  })()
+                : `<div class="participants-list"><em>No participants yet</em></div>`
+            }
+          </div>
         `;
 
         activitiesList.appendChild(activityCard);
