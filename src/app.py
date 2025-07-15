@@ -59,20 +59,18 @@ async def initialize_database(collection: AsyncIOMotorCollection):
             await collection.insert_one({"_id": name, **details})
 
 # Database dependency - use this in route handlers
-async def get_db():
+async def get_db(request: Request):
     """Dependency to get the database from app state"""
-    # In a real app, you would want to handle the case where the app state is not initialized
-    # For this example, we assume the lifespan function has already set up the state
-    from fastapi import Request
-    request = Request.get_current()
+    # Get the database from the app state via the request
     return request.app.state.db
 
-async def get_activities_collection() -> AsyncIOMotorCollection:
+async def get_activities_collection(request: Request) -> AsyncIOMotorCollection:
     """
     Dependency that provides the activities collection.
     This pattern allows for better testability and separation of concerns.
     """
-    db = await get_db()
+    # Get the database using the request directly
+    db = request.app.state.db
     return db.activities
 
 app = FastAPI(title="Mergington High School API",
@@ -91,7 +89,7 @@ def root():
 
 
 @app.get("/activities")
-async def get_activities(collection: Annotated[AsyncIOMotorCollection, Depends(get_activities_collection)]):
+async def get_activities(collection: AsyncIOMotorCollection = Depends(get_activities_collection)):
     """Get all activities from MongoDB"""
     activities_cursor = collection.find({})
     activities_dict = {}
@@ -107,7 +105,7 @@ async def get_activities(collection: Annotated[AsyncIOMotorCollection, Depends(g
 async def signup_for_activity(
     activity_name: str, 
     request: Request,
-    collection: Annotated[AsyncIOMotorCollection, Depends(get_activities_collection)]
+    collection: AsyncIOMotorCollection = Depends(get_activities_collection)
 ):
     """Sign up a student for an activity"""
     data = await request.json()
@@ -138,7 +136,7 @@ async def signup_for_activity(
 async def unregister_participant(
     activity_name: str, 
     request: Request,
-    collection: Annotated[AsyncIOMotorCollection, Depends(get_activities_collection)]
+    collection: AsyncIOMotorCollection = Depends(get_activities_collection)
 ):
     """Unregister a student from an activity"""
     data = await request.json()
@@ -163,7 +161,7 @@ async def unregister_participant(
 
 @app.get("/db-status")
 async def get_db_status(
-    collection: Annotated[AsyncIOMotorCollection, Depends(get_activities_collection)],
+    collection: AsyncIOMotorCollection = Depends(get_activities_collection),
     db = Depends(get_db)
 ):
     """Check database status - for debugging purposes"""
