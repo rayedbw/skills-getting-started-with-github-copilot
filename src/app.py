@@ -5,43 +5,50 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 import json
 from pathlib import Path
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase, AsyncIOMotorCollection
 from contextlib import asynccontextmanager
-
-# Global variable to hold the MongoDB collection
-activities_collection = None
+from typing import Annotated, Generator
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager for the FastAPI application."""
-    global activities_collection
-    
     # Setup MongoDB connection during startup
-    mongo_client = AsyncIOMotorClient("mongodb://localhost:27017")
-    db = mongo_client.mergington_high
-    activities_collection = db.activities
+    client = AsyncIOMotorClient("mongodb://localhost:27017")
     
+    # Store the client in app state for easier access and dependency injection
+    app.state.mongo_client = client
+    app.state.db = client.mergington_high
+    
+    # Load activities from JSON file and populate database if needed
+    await initialize_database(app.state.db.activities)
+    
+    yield
+    
+    # Cleanup on shutdown
+    client.close()
+    print("MongoDB connection closed")
+
+async def initialize_database(collection: AsyncIOMotorCollection):
+    """Initialize the database with activities from the JSON file if it's empty."""
     # Load activities from JSON file
     activities_file = Path(__file__).parent / "activities.json"
     with open(activities_file, "r") as f:
         initial_activities = json.load(f)
-        
+    
     # Check if the collection already has data
-    count = await activities_collection.count_documents({})
+    count = await collection.count_documents({})
     print(f"Found {count} existing activities in the database")
     
     # Reset database to fix duplicate entries (only for development)
     if count > 10:  # If we have more than expected (indicating duplicates)
         print("Detected possible duplicates, dropping collection")
-        await db.drop_collection("activities")
-        # Recreate the collection reference
-        activities_collection = db.activities
+        await collection.drop()
         count = 0  # Reset count since we dropped the collection
     
     # Only populate if the collection is empty
@@ -49,13 +56,24 @@ async def lifespan(app: FastAPI):
         print("Populating database with initial activities")
         # Pre-populate with initial activities using activity name as _id (key)
         for name, details in initial_activities.items():
-            await activities_collection.insert_one({"_id": name, **details})
-    
-    yield
-    
-    # Cleanup on shutdown
-    mongo_client.close()
-    print("MongoDB connection closed")
+            await collection.insert_one({"_id": name, **details})
+
+# Database dependency - use this in route handlers
+async def get_db():
+    """Dependency to get the database from app state"""
+    # In a real app, you would want to handle the case where the app state is not initialized
+    # For this example, we assume the lifespan function has already set up the state
+    from fastapi import Request
+    request = Request.get_current()
+    return request.app.state.db
+
+async def get_activities_collection() -> AsyncIOMotorCollection:
+    """
+    Dependency that provides the activities collection.
+    This pattern allows for better testability and separation of concerns.
+    """
+    db = await get_db()
+    return db.activities
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities",
@@ -73,9 +91,9 @@ def root():
 
 
 @app.get("/activities")
-async def get_activities():
+async def get_activities(collection: Annotated[AsyncIOMotorCollection, Depends(get_activities_collection)]):
     """Get all activities from MongoDB"""
-    activities_cursor = activities_collection.find({})
+    activities_cursor = collection.find({})
     activities_dict = {}
     
     async for activity in activities_cursor:
@@ -86,13 +104,17 @@ async def get_activities():
 
 
 @app.post("/activities/{activity_name}/signup")
-async def signup_for_activity(activity_name: str, request: Request):
+async def signup_for_activity(
+    activity_name: str, 
+    request: Request,
+    collection: Annotated[AsyncIOMotorCollection, Depends(get_activities_collection)]
+):
     """Sign up a student for an activity"""
     data = await request.json()
     email = data.get("email")
 
     # Retrieve the activity from MongoDB
-    activity = await activities_collection.find_one({"_id": activity_name})
+    activity = await collection.find_one({"_id": activity_name})
     if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
 
@@ -105,7 +127,7 @@ async def signup_for_activity(activity_name: str, request: Request):
         raise HTTPException(status_code=400, detail="Activity is full")
 
     # Add the student to the activity
-    await activities_collection.update_one(
+    await collection.update_one(
         {"_id": activity_name},
         {"$push": {"participants": email}}
     )
@@ -113,13 +135,17 @@ async def signup_for_activity(activity_name: str, request: Request):
 
 
 @app.post("/activities/{activity_name}/unregister")
-async def unregister_participant(activity_name: str, request: Request):
+async def unregister_participant(
+    activity_name: str, 
+    request: Request,
+    collection: Annotated[AsyncIOMotorCollection, Depends(get_activities_collection)]
+):
     """Unregister a student from an activity"""
     data = await request.json()
     email = data.get("email")
 
     # Retrieve the activity from MongoDB
-    activity = await activities_collection.find_one({"_id": activity_name})
+    activity = await collection.find_one({"_id": activity_name})
     if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
 
@@ -128,7 +154,7 @@ async def unregister_participant(activity_name: str, request: Request):
         raise HTTPException(status_code=400, detail="Participant not found in this activity")
 
     # Remove the student from the activity
-    await activities_collection.update_one(
+    await collection.update_one(
         {"_id": activity_name},
         {"$pull": {"participants": email}}
     )
@@ -136,10 +162,14 @@ async def unregister_participant(activity_name: str, request: Request):
 
 
 @app.get("/db-status")
-async def get_db_status():
+async def get_db_status(
+    collection: Annotated[AsyncIOMotorCollection, Depends(get_activities_collection)],
+    db = Depends(get_db)
+):
     """Check database status - for debugging purposes"""
-    count = await activities_collection.count_documents({})
+    count = await collection.count_documents({})
     return {
         "activities_count": count,
-        "connection_status": "Connected" if activities_collection else "Not connected"
+        "connection_status": "Connected" if db else "Not connected",
+        "database_name": db.name if db else "Not available"
     }
