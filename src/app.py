@@ -74,6 +74,12 @@ activities = {
         "schedule": "Wednesdays, 3:30 PM - 5:00 PM",
         "max_participants": 14,
         "participants": ["chloe@mergington.edu", "ben@mergington.edu"]
+    },
+    "Photography Club": {
+        "description": "Learn photography techniques and participate in photo walks",
+        "schedule": "Thursdays, 3:30 PM - 5:00 PM",
+        "max_participants": 10,
+        "participants": []
     }
 }
 
